@@ -95,15 +95,57 @@ def _lint_toml_inproc(content: str) -> tuple[bool, str]:
 
 
 def _lint_python_inproc(content: str) -> tuple[bool, str]:
-    """In-process Python syntax check via ast.parse (py_compile's scope, no subprocess)."""
+    """In-process Python syntax check via ast.parse (py_compile's scope), plus a fast ruff pass
+    for *undefined names* (F821/F822/F823) -- the runtime-crash class ``ast`` cannot see (e.g.
+    ``os.environ`` with no ``import os``). ruff needs no project root, so this also covers files
+    outside any git worktree that the LSP tier never claims. Missing ruff degrades to syntax-only."""
     try:
         ast.parse(content)
-        return True, ""
     except SyntaxError as e:
         loc = f" (line {e.lineno}, column {e.offset})" if e.lineno else ""
         return False, f"{type(e).__name__}: {e.msg}{loc}"
     except Exception as e:  # noqa: BLE001
         return False, f"{type(e).__name__}: {e}"
+    return _ruff_semantic_pass(content)
+
+
+_RUFF_RESOLVED = False
+_RUFF_BIN: "str | None" = None
+
+
+def _find_ruff() -> "str | None":
+    """ruff binary next to the interpreter or on PATH; resolved once per process."""
+    global _RUFF_RESOLVED, _RUFF_BIN
+    if _RUFF_RESOLVED:
+        return _RUFF_BIN
+    import shutil
+    import sys
+    candidates = [os.path.join(os.path.dirname(sys.executable), "ruff"), shutil.which("ruff")]
+    _RUFF_BIN = next((c for c in candidates if c and os.path.isfile(c) and os.access(c, os.X_OK)), None)
+    _RUFF_RESOLVED = True
+    return _RUFF_BIN
+
+
+def _ruff_semantic_pass(content: str) -> tuple[bool, str]:
+    """Report undefined names ruff finds in *content*. Only rules that indicate a genuine runtime
+    failure are selected (F821 undefined name, F822 undefined ``__all__`` entry, F823 local
+    referenced before assignment); style rules are excluded so this never nags. Any ruff failure
+    degrades to "ok"."""
+    ruff = _find_ruff()
+    if not ruff:
+        return True, ""
+    import subprocess
+    try:
+        proc = subprocess.run(
+            [ruff, "check", "--select", "F821,F822,F823", "--output-format", "concise", "--no-cache",
+             "--quiet", "--stdin-filename", "buffer.py", "-"],
+            input=content, capture_output=True, text=True, timeout=5)
+    except (OSError, subprocess.SubprocessError):
+        return True, ""
+    if proc.returncode == 0:
+        return True, ""
+    lines = [ln for ln in proc.stdout.splitlines() if ln.strip() and not ln.startswith("Found ")]
+    return (True, "") if not lines else (False, "\n".join(lines[:20]))
 
 
 # In-process linters, preferred over shell linters (no subprocess). Each returns

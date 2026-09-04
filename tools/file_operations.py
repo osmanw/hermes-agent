@@ -29,6 +29,7 @@ from tools.file_operations_common import (
     _UTF8_BOM, _detect_line_ending, _has_bom, _normalize_line_endings, _strip_bom,
     _strip_terminal_fence_leaks, normalize_read_pagination, normalize_search_pagination)
 from tools.file_operations_lint import LINTERS_INPROC, LintMixin, _FAIL_CLOSED_INPROC_EXTS
+from tools.file_operations_lint import _find_ruff, _lint_python_inproc  # noqa: F401  (test/plugin re-export)
 from tools.file_operations_search import SearchMixin
 
 logger = logging.getLogger(__name__)
