@@ -24,6 +24,7 @@ afterEach(() => {
 
 // Render the submenu inside an open menu/sub so its content (switches) mounts.
 function renderSubmenu(opts: {
+  supportedEfforts?: readonly string[]
   defaultEffort?: string
   effort?: string
   fastControl: FastControl
@@ -47,6 +48,7 @@ function renderSubmenu(opts: {
             onSetOptions={opts.onSetOptions}
             provider="p1"
             reasoning={opts.reasoning}
+            supportedEfforts={opts.supportedEfforts}
           />
         </DropdownMenuSub>
       </DropdownMenuContent>
@@ -60,6 +62,47 @@ function renderSubmenu(opts: {
 // ever writes directly again, picking an effort for a kanban card would reach
 // over and change the user's live chat.
 describe('ModelEditSubmenu reports edits without performing them', () => {
+  it('offers only the explicitly configured route efforts', () => {
+    const onSetOptions = vi.fn()
+    renderSubmenu({ supportedEfforts: ['low', 'high'], fastControl: { kind: 'none' }, onSetOptions, reasoning: true })
+    expect(screen.getAllByRole('menuitemradio').map(item => item.textContent)).toEqual(['Low', 'High'])
+    fireEvent.click(screen.getByRole('menuitemradio', { name: 'High' }))
+    expect(onSetOptions).toHaveBeenCalledWith({ effort: 'high' })
+  })
+
+  it('shows the level the route will actually run, clamping down to its nearest supported one', () => {
+    // 'medium' is unsupported here; the backend clamps it to the nearest *weaker* level, so the
+    // menu must not sit on a level the request will never carry.
+    renderSubmenu({
+      effort: 'medium',
+      supportedEfforts: ['low', 'high'],
+      fastControl: { kind: 'none' },
+      onSetOptions: vi.fn(),
+      reasoning: true
+    })
+
+    expect(screen.getAllByRole('menuitemradio').filter(item => item.getAttribute('aria-checked') === 'true')
+      .map(item => item.textContent)).toEqual(['Low'])
+  })
+
+  it('thinking: toggling back on restores a level the route supports', () => {
+    // Guards the '' sentinel: thinking-off leaves the radio unselected, and the toggle falls back
+    // to the row default — which must itself be clamped, not reported raw or replaced by the
+    // weakest level on the scale.
+    const onSetOptions = vi.fn()
+    renderSubmenu({
+      defaultEffort: 'max',
+      effort: 'none',
+      supportedEfforts: ['low', 'high'],
+      fastControl: { kind: 'none' },
+      onSetOptions,
+      reasoning: true
+    })
+
+    fireEvent.click(screen.getByRole('switch'))
+
+    expect(onSetOptions).toHaveBeenCalledWith({ effort: 'high' })
+  })
   it('param fast: reports the toggle', () => {
     const onSetOptions = vi.fn()
     renderSubmenu({ fastControl: { kind: 'param', on: true }, onSetOptions, reasoning: false })

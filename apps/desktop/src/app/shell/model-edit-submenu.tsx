@@ -10,7 +10,7 @@ import {
 } from '@/components/ui/dropdown-menu'
 import { Switch } from '@/components/ui/switch'
 import { useI18n } from '@/i18n'
-import { isThinkingEnabled, REASONING_EFFORTS, resolveReasoningEffort } from '@/lib/reasoning-effort'
+import { clampReasoningEffort, isThinkingEnabled, REASONING_EFFORTS, resolveReasoningEffort } from '@/lib/reasoning-effort'
 
 // Hermes' real reasoning levels live in lib/reasoning-effort; `none` is owned
 // by the Thinking toggle, not the radio.
@@ -86,6 +86,9 @@ interface ModelEditSubmenuProps {
   provider: string
   /** Whether this model supports reasoning effort. */
   reasoning: boolean
+  /** The route's declared effort vocabulary, when it publishes one. Absent means
+   *  unconstrained — the full scale is offered. */
+  supportedEfforts?: readonly string[]
 }
 
 export function ModelEditSubmenu(props: ModelEditSubmenuProps) {
@@ -109,12 +112,19 @@ function ModelEditSubmenuBody({
   isActive,
   onSelectModel,
   onSetOptions,
-  reasoning
+  reasoning,
+  supportedEfforts
 }: ModelEditSubmenuProps) {
   const { t } = useI18n()
   const copy = t.shell.modelOptions
 
-  const effortValue = resolveReasoningEffort(effort, defaultEffort)
+  const efforts = supportedEfforts === undefined ? REASONING_EFFORTS
+    : REASONING_EFFORTS.filter(value => supportedEfforts.includes(value))
+
+  // `resolveReasoningEffort` returns '' when thinking is off — the radio holds no selection then,
+  // and the toggle reads the row default instead. Clamping has to leave that sentinel alone.
+  const effortValue = clampReasoningEffort(resolveReasoningEffort(effort, defaultEffort), supportedEfforts)
+  const fallbackEffort = clampReasoningEffort(defaultEffort, supportedEfforts)
   const thinkingOn = isThinkingEnabled(effort, defaultEffort)
   const showThinkingToggle = reasoning && canDisableReasoning !== false
 
@@ -151,7 +161,7 @@ function ModelEditSubmenuBody({
           <Switch
             checked={thinkingOn}
             className="ml-auto"
-            onCheckedChange={checked => onSetOptions({ effort: checked ? effortValue || defaultEffort : 'none' })}
+            onCheckedChange={checked => onSetOptions({ effort: checked ? effortValue || fallbackEffort : 'none' })}
             size="xs"
           />
         </DropdownMenuItem>
@@ -167,7 +177,7 @@ function ModelEditSubmenuBody({
           <DropdownMenuSeparator className="mx-0" />
           <DropdownMenuLabel className={dropdownMenuSectionLabel}>{copy.effort}</DropdownMenuLabel>
           <DropdownMenuRadioGroup onValueChange={value => onSetOptions({ effort: value })} value={effortValue}>
-            {REASONING_EFFORTS.map(value => (
+            {efforts.map(value => (
               <DropdownMenuRadioItem
                 className={dropdownMenuRow}
                 key={value}

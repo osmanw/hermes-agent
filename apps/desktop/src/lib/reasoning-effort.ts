@@ -41,6 +41,28 @@ export const isReasoningEffort = (value: string): value is ReasoningEffort =>
 export const isThinkingEnabled = (effort: string, fallback: string = DEFAULT_REASONING_EFFORT): boolean =>
   normalize(effort || fallback) !== 'none'
 
+/** Clamp a level onto a route's declared set, mirroring the backend's `clamp_effort`
+ *  (agent/reasoning_effort.py): verbatim when supported, else the nearest WEAKER level so a
+ *  clamp never escalates cost, else the weakest supported one. An undeclared set (`undefined`),
+ *  an empty value (thinking off — the radio holds no selection) and a level outside the scale
+ *  all pass through untouched, so this only narrows what a route actually constrains. */
+export function clampReasoningEffort(effort: string, supported?: readonly string[]): string {
+  if (!effort || supported === undefined) {
+    return effort
+  }
+
+  const scale = REASONING_EFFORTS.filter(value => supported.includes(value))
+  const index = REASONING_EFFORTS.indexOf(normalize(effort) as ReasoningEffort)
+
+  if (!scale.length || index < 0 || scale.includes(REASONING_EFFORTS[index])) {
+    return effort
+  }
+
+  const weaker = scale.filter(value => REASONING_EFFORTS.indexOf(value) < index)
+
+  return weaker.length ? weaker[weaker.length - 1] : scale[0]
+}
+
 /** The level a scale control should show. Empty inherits `fallback`; `none`
  *  (thinking off) selects nothing; anything unrecognized clamps to the default. */
 export function resolveReasoningEffort(effort: string, fallback: string = DEFAULT_REASONING_EFFORT): string {

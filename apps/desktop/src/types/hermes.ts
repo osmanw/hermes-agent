@@ -442,6 +442,8 @@ export interface ModelOptionProvider {
 }
 
 export interface ModelCapabilities {
+  /** Explicit effort contract for a configured custom route. */
+  supported_efforts?: string[]
   /** False when the route rejects a reasoning disable ("mandatory" in the
    *  provider catalog), so the Thinking toggle must not be offered. Absent
    *  when the catalog doesn't say. */
