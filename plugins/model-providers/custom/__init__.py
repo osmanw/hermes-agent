@@ -26,6 +26,20 @@ def _looks_like_ollama_endpoint(base_url: str | None) -> bool:
     return bool(host) and (host == "ollama.com" or host.endswith(".ollama.com") or "ollama" in host.split("."))
 
 
+def _declared_route_efforts(model: str | None, base_url: str | None) -> tuple[str, ...] | None:
+    """The route's own ``supported_efforts`` from config, or ``None`` when it doesn't say.
+
+    A configured route knows its models' effort vocabulary far better than the generic wire list:
+    an aggregator publishing effort-pinned aliases (``.../model-low``) accepts exactly one level.
+    Config read failures fall back to the generic vocabulary rather than dropping the effort.
+    """
+    try:
+        from hermes_cli.config import get_custom_provider_model_efforts
+        return get_custom_provider_model_efforts(model=model or "", base_url=base_url or "")
+    except Exception:
+        return None
+
+
 class CustomProfile(ProviderProfile):
     """Custom/Ollama local provider — think=false and num_ctx support."""
 
@@ -38,19 +52,26 @@ class CustomProfile(ProviderProfile):
             extra_body["options"] = {"num_ctx": ollama_num_ctx}
         # disabled -> top-level reasoning_effort="none" (Ollama's /v1 ignores
         # extra_body.think) plus think=False only on Ollama URLs; enabled+effort ->
-        # top-level reasoning_effort clamped to the OpenAI-compat wire (GLM/ARK,
-        # vLLM and SGLang all top out at "max"; "ultra" verbatim 400s); enabled
-        # without effort -> omit so the server default applies. Never emit
-        # think=True (Ollama-only flag).
+        # top-level reasoning_effort clamped to the route's declared supported_efforts, else
+        # to the OpenAI-compat wire (GLM/ARK, vLLM and SGLang all top out at "max"; "ultra"
+        # verbatim 400s); enabled without effort -> omit so the server default applies. Never
+        # emit think=True (Ollama-only flag).
         if reasoning_config and isinstance(reasoning_config, dict):
             effort = (reasoning_config.get("effort") or "").strip().lower()
-            if effort == "none" or reasoning_config.get("enabled", True) is False:
-                # See #14820.
-                top_level["reasoning_effort"] = "none"
-                if _looks_like_ollama_endpoint(ctx.get("base_url")):
-                    extra_body["think"] = False
-            elif effort:
-                top_level["reasoning_effort"] = clamp_effort(effort, OPENAI_COMPAT_WIRE_EFFORTS)
+            disabled = effort == "none" or reasoning_config.get("enabled", True) is False
+            if disabled or effort:  # nothing to emit otherwise, so skip the config read entirely
+                declared = _declared_route_efforts(ctx.get("model"), ctx.get("base_url"))
+                if disabled:
+                    # See #14820. A route that declares its vocabulary and omits "none" cannot turn
+                    # thinking off; "none" would then either 400 or — on a permissive aggregator that
+                    # only checks whether a reasoning field is *present* — suppress the per-model
+                    # default it would otherwise inject, leaving the request with no level at all.
+                    if declared is None or "none" in declared:
+                        top_level["reasoning_effort"] = "none"
+                        if _looks_like_ollama_endpoint(ctx.get("base_url")):
+                            extra_body["think"] = False
+                elif declared != ():
+                    top_level["reasoning_effort"] = clamp_effort(effort, declared or OPENAI_COMPAT_WIRE_EFFORTS)
         return extra_body, top_level
 
     def fetch_models(

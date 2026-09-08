@@ -180,3 +180,118 @@ class TestCustomReasoningWithNumCtx:
         assert eb == {"options": {"num_ctx": 8192}}
         assert tl == {}
 
+
+class TestCustomReasoningRouteDeclaredEfforts:
+    """A configured route's ``supported_efforts`` beats the generic wire vocabulary.
+
+    An aggregator fronted by ``provider=custom`` may publish effort-pinned model aliases
+    (``vendor/model-low``) that accept exactly one level, and may be permissive enough to
+    return 200 for a level it silently ignores. Clamping to the declared set is what keeps
+    the request honest; a silent route keeps the previous generic behaviour.
+    """
+
+    ROUTE = "https://aggregator.invalid/v1"
+
+    @pytest.fixture
+    def declared(self, monkeypatch):
+        """Patch the config reader at its use site in the plugin module."""
+        import providers
+
+        module = type(providers.get_provider_profile("custom")).__module__
+        import sys
+
+        def _install(value):
+            monkeypatch.setattr(
+                sys.modules[module], "_declared_route_efforts", lambda model, base_url: value
+            )
+
+        return _install
+
+    def test_effort_clamps_down_to_the_declared_level(self, custom_profile, declared):
+        declared(("low",))
+        _, tl = custom_profile.build_api_kwargs_extras(
+            reasoning_config={"enabled": True, "effort": "high"},
+            model="vendor/model-low",
+            base_url=self.ROUTE,
+        )
+        assert tl == {"reasoning_effort": "low"}
+
+    def test_effort_within_the_declared_set_passes_through(self, custom_profile, declared):
+        declared(("low", "medium", "high"))
+        _, tl = custom_profile.build_api_kwargs_extras(
+            reasoning_config={"enabled": True, "effort": "medium"},
+            model="vendor/model",
+            base_url=self.ROUTE,
+        )
+        assert tl == {"reasoning_effort": "medium"}
+
+    def test_hermes_only_effort_clamps_into_the_declared_set(self, custom_profile, declared):
+        """``ultra`` is Hermes-internal; no wire takes it."""
+        declared(("low", "high"))
+        _, tl = custom_profile.build_api_kwargs_extras(
+            reasoning_config={"enabled": True, "effort": "ultra"},
+            model="vendor/model",
+            base_url=self.ROUTE,
+        )
+        assert tl == {"reasoning_effort": "high"}
+
+    def test_route_declaring_no_efforts_emits_nothing(self, custom_profile, declared):
+        declared(())
+        eb, tl = custom_profile.build_api_kwargs_extras(
+            reasoning_config={"enabled": True, "effort": "high"},
+            model="vendor/plain",
+            base_url=self.ROUTE,
+        )
+        assert eb == {}
+        assert tl == {}
+
+    @pytest.mark.parametrize(
+        "reasoning_config",
+        [{"enabled": False}, {"enabled": True, "effort": "none"}],
+    )
+    def test_disable_is_dropped_when_the_route_cannot_disable(
+        self, custom_profile, declared, reasoning_config
+    ):
+        """Declared efforts without ``none`` mean thinking is mandatory.
+
+        Emitting ``reasoning_effort="none"`` there is worse than emitting nothing: a permissive
+        aggregator treats any reasoning field as an explicit client choice and skips the per-model
+        default it would otherwise inject, so the request ships with no level at all.
+        """
+        declared(("low", "high"))
+        eb, tl = custom_profile.build_api_kwargs_extras(
+            reasoning_config=reasoning_config, model="vendor/model", base_url=self.ROUTE
+        )
+        assert eb == {}
+        assert tl == {}
+
+    def test_disable_survives_when_the_route_declares_none(self, custom_profile, declared):
+        declared(("none", "low", "high"))
+        _, tl = custom_profile.build_api_kwargs_extras(
+            reasoning_config={"enabled": False}, model="vendor/model", base_url=self.ROUTE
+        )
+        assert tl == {"reasoning_effort": "none"}
+
+    def test_silent_route_keeps_the_generic_wire_behaviour(self, custom_profile, declared):
+        declared(None)
+        _, tl = custom_profile.build_api_kwargs_extras(
+            reasoning_config={"enabled": True, "effort": "max"},
+            model="glm-5.2",
+            base_url=self.ROUTE,
+        )
+        assert tl == {"reasoning_effort": "max"}
+        _, tl_off = custom_profile.build_api_kwargs_extras(
+            reasoning_config={"enabled": False}, model="glm-5.2", base_url=self.ROUTE
+        )
+        assert tl_off == {"reasoning_effort": "none"}
+
+    def test_num_ctx_still_rides_along_when_the_effort_is_dropped(self, custom_profile, declared):
+        declared(())
+        eb, tl = custom_profile.build_api_kwargs_extras(
+            reasoning_config={"enabled": True, "effort": "high"},
+            ollama_num_ctx=8192,
+            model="vendor/plain",
+            base_url=self.ROUTE,
+        )
+        assert eb == {"options": {"num_ctx": 8192}}
+        assert tl == {}

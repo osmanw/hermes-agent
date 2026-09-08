@@ -540,6 +540,38 @@ def get_custom_provider_model_capability(
     return None
 
 
+def get_custom_provider_model_efforts(
+    model: str,
+    base_url: str,
+    custom_providers: Optional[List[Dict[str, Any]]] = None,
+    config: Optional[Dict[str, Any]] = None) -> Optional[Tuple[str, ...]]:
+    """Declared ``supported_efforts`` for one custom-provider model, or ``None`` when the route is
+    silent (callers then fall back to the generic wire vocabulary).
+
+    An explicit empty list is an answer, not silence: it means the model takes no effort at all, so
+    it returns ``()`` and callers omit the wire field rather than guessing a level. Scoped to the
+    normalized route + exact runtime model id, like ``get_custom_provider_model_capability``.
+    """
+    from hermes_cli.config import get_compatible_custom_providers, load_config_readonly
+    if not model or not base_url:
+        return None
+    if custom_providers is None:
+        try:
+            if config is None:
+                config = load_config_readonly()
+            custom_providers = get_compatible_custom_providers(config)
+        except Exception:
+            return None
+
+    for model_cfg in _route_model_cfgs(model, base_url, custom_providers, config):
+        efforts = model_cfg.get("supported_efforts")
+        if not isinstance(efforts, list):
+            continue
+        return tuple(dict.fromkeys(
+            e.strip().lower() for e in efforts if isinstance(e, str) and e.strip()))
+    return None
+
+
 def is_provider_enabled(provider_cfg: Optional[Dict[str, Any]]) -> bool:
     """Whether a ``providers.<name>`` block is enabled: default True; only an explicit
     ``enabled: false`` hides it from the picker, ``/models``, runtime resolver and doctor."""

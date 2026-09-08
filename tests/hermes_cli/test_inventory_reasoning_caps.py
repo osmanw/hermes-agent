@@ -14,6 +14,36 @@ import hermes_cli.models as models_mod
 from hermes_cli import models_reasoning_caps
 
 
+def test_custom_model_contract_is_scoped_to_its_provider():
+    rows = [{"slug": slug, "models": ["r/model", "r/plain"]} for slug in ("router", "other")]
+    providers = [{"provider_key": "router", "models": {
+        "r/model": {"supports_reasoning": True, "supports_fast": False,
+                    "supported_efforts": ["low", "high"], "can_disable_reasoning": False},
+        "r/plain": {"supports_reasoning": False, "supported_efforts": []},
+    }}]
+    inv._apply_capabilities(rows, providers)
+    assert rows[0]["capabilities"]["r/model"]["supported_efforts"] == ["low", "high"]
+    assert rows[0]["capabilities"]["r/model"]["can_disable_reasoning"] is False
+    assert rows[0]["capabilities"]["r/plain"]["reasoning"] is False
+    assert "supported_efforts" not in rows[1]["capabilities"]["r/model"]
+
+
+def test_route_identity_matches_across_url_spellings_and_survives_a_null_base_url():
+    """Entries are matched by normalized route, and a malformed one must not take the picker down.
+
+    ``_apply_capabilities`` has no exception guard: a provider entry carrying ``base_url: null``
+    (legal YAML for a half-written block) once raised straight through it, emptying every model row.
+    """
+    rows = [{"slug": "router", "api_url": "https://Example.invalid:443/v1/", "models": ["r/model"]}]
+    providers = [
+        {"provider_key": "unrelated", "base_url": None, "models": {}},
+        {"provider_key": "not-the-slug", "base_url": "https://example.invalid/v1",
+         "models": {"r/model": {"supported_efforts": ["low"]}}},
+    ]
+    inv._apply_capabilities(rows, providers)
+    assert rows[0]["capabilities"]["r/model"]["supported_efforts"] == ["low"]
+
+
 def _patch_catalog(monkeypatch, caps_by_model, *, provider="nous"):
     """Point the Nous/OpenRouter catalog readers at a fixed capability map."""
     monkeypatch.setattr(models_mod, "model_supports_fast_mode", lambda model: False)

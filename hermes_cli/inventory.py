@@ -140,7 +140,7 @@ def build_models_payload(
     if pricing:
         _apply_pricing(rows, force_fresh_nous_tier=force_fresh_nous_tier, cached_only=pricing_cache_only)
     if capabilities:
-        _apply_capabilities(rows)
+        _apply_capabilities(rows, ctx.custom_providers)
     if featured:
         _apply_featured(rows)
     _apply_custom_aliases(rows)
@@ -269,11 +269,32 @@ def _reasoning_catalog_reader(slug: str):
     return read
 
 
-def _apply_capabilities(rows: list[dict]) -> None:
+def _configured_models_for_row(row: dict, custom_providers: list | None) -> dict:
+    """The ``models`` map of the custom-provider entry serving *row*, or ``{}``.
+
+    Matched by provider key first, then by route identity — a row for a named provider block and the
+    ``custom_providers`` entry behind it agree on the endpoint even when the two spellings differ.
+    """
+    from hermes_cli.route_identity import normalize_route_base_url
+
+    slug = row.get("slug") or ""
+    route = normalize_route_base_url(row.get("api_url"))
+    for entry in custom_providers or []:
+        if not isinstance(entry, dict):
+            continue
+        if entry.get("provider_key") == slug or (route and normalize_route_base_url(entry.get("base_url")) == route):
+            models = entry.get("models")
+            return models if isinstance(models, dict) else {}
+    return {}
+
+
+def _apply_capabilities(rows: list[dict], custom_providers: list | None = None) -> None:
     """Attach ``{model: {fast, reasoning, ...}}`` per row. ``reasoning`` defaults True when the catalog is
     silent (the dial is a no-op on models that ignore it; hiding it from a capable model is worse). A
-    serving aggregator's detail overrides models.dev (adds ``can_disable_reasoning``). ``supported_efforts``
-    is deliberately NOT forwarded — it under-reports levels that work."""
+    serving aggregator's detail overrides models.dev (adds ``can_disable_reasoning``). A *discovered*
+    ``supported_efforts`` is still deliberately NOT forwarded — it under-reports levels that work; only
+    the route's own ``custom_providers`` entry can narrow the set, because that one is a declaration by
+    the operator rather than a guess, and it is what the transport clamps the request to."""
     from hermes_cli.models import model_supports_fast_mode
 
     try:
@@ -283,6 +304,7 @@ def _apply_capabilities(rows: list[dict]) -> None:
 
     for row in rows:
         slug = row.get("slug") or ""
+        custom_models = _configured_models_for_row(row, custom_providers)
         caps: dict[str, dict[str, Any]] = {}
         read_reasoning_catalog = _reasoning_catalog_reader(slug.lower())
 
@@ -309,6 +331,17 @@ def _apply_capabilities(rows: list[dict]) -> None:
                     entry["reasoning"] = False
                 elif detail:
                     entry["can_disable_reasoning"] = not detail.get("mandatory")
+
+            configured = custom_models.get(model)
+            if isinstance(configured, dict):
+                for source, target in (("supports_reasoning", "reasoning"),
+                                       ("supports_fast", "fast"),
+                                       ("can_disable_reasoning", "can_disable_reasoning")):
+                    if isinstance(configured.get(source), bool):
+                        entry[target] = configured[source]
+                efforts = configured.get("supported_efforts")
+                if isinstance(efforts, list) and all(isinstance(e, str) for e in efforts):
+                    entry["supported_efforts"] = list(dict.fromkeys(efforts))
 
             caps[model] = entry
 

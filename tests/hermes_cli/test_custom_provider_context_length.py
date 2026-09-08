@@ -11,6 +11,7 @@ from unittest.mock import patch
 from hermes_cli.config import (
     get_custom_provider_context_length,
     get_custom_provider_model_capability,
+    get_custom_provider_model_efforts,
 )
 
 
@@ -216,3 +217,33 @@ class TestContextProbeTiers:
             assert a > b, f"tiers must strictly descend, got {a} then {b}"
         # 128K is still a tier (users relying on it probe-down get there)
         assert 128_000 in CONTEXT_PROBE_TIERS
+
+
+class TestGetCustomProviderModelEfforts:
+    """``supported_efforts`` is the route's declared effort vocabulary."""
+
+    ROUTE = "https://example.invalid/v1"
+
+    def _custom(self, efforts):
+        return [{"base_url": self.ROUTE, "models": {"m": {"supported_efforts": efforts}}}]
+
+    def test_declared_list_is_normalized_and_deduped(self):
+        got = get_custom_provider_model_efforts("m", self.ROUTE, self._custom([" LOW ", "high", "low"]))
+        assert got == ("low", "high")
+
+    def test_empty_list_is_an_answer_not_silence(self):
+        """A model declaring no efforts must be distinguishable from a route that never said."""
+        assert get_custom_provider_model_efforts("m", self.ROUTE, self._custom([])) == ()
+
+    def test_silent_route_returns_none(self):
+        custom = [{"base_url": self.ROUTE, "models": {"m": {"context_length": 1}}}]
+        assert get_custom_provider_model_efforts("m", self.ROUTE, custom) is None
+        assert get_custom_provider_model_efforts("other", self.ROUTE, self._custom(["low"])) is None
+
+    def test_non_list_and_non_string_entries_are_ignored(self):
+        assert get_custom_provider_model_efforts("m", self.ROUTE, self._custom("low")) is None
+        assert get_custom_provider_model_efforts("m", self.ROUTE, self._custom(["low", 3, "", None])) == ("low",)
+
+    def test_empty_inputs_return_none(self):
+        assert get_custom_provider_model_efforts("", self.ROUTE, self._custom(["low"])) is None
+        assert get_custom_provider_model_efforts("m", "", self._custom(["low"])) is None
