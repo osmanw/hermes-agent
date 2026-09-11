@@ -1900,6 +1900,17 @@ def _external_process_auth_evidence(provider_id: str) -> tuple[bool, Optional[st
     False means "not verifiable from here", NOT "signed out" (the Copilot CLI may use an OS keychain
     Hermes can't read). Deliberately subprocess-free: spawning ``gh auth token`` from status
     endpoints/pickers re-creates the cold-start stall copilot_auth.py avoids."""
+    if provider_id in {"devin", "devin-cli", "devin-acp"}:
+        if os.getenv("WINDSURF_API_KEY", "").strip():
+            return True, "env: WINDSURF_API_KEY"
+        xdg = os.environ.get("XDG_DATA_HOME") or os.path.expanduser("~/.local/share")
+        cred = os.path.join(xdg, "devin", "credentials.toml")
+        try:
+            if os.path.isfile(cred) and os.path.getsize(cred) > 2:
+                return True, "devin credentials"
+        except OSError:
+            pass
+        return False, None
     if provider_id != "copilot-acp":
         return False, None
     # 1. Supported env tokens — the same vars the Copilot CLI itself honors.

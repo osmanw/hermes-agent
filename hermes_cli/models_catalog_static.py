@@ -327,6 +327,7 @@ CANONICAL_PROVIDERS: list[ProviderEntry] = [ProviderEntry(*row) for row in (
     ("nvidia", "NVIDIA NIM", "NVIDIA NIM (Nemotron models via build.nvidia.com or local NIM)"),
     ("copilot", "GitHub Copilot", "GitHub Copilot (Uses GITHUB_TOKEN or gh auth token)"),
     ("copilot-acp", "GitHub Copilot ACP", "GitHub Copilot ACP (Spawns copilot --acp --stdio)"),
+    ("devin", "Devin CLI (OAuth)", "Devin Pro via `devin auth login`; Hermes owns prompts/tools. No API key or Devin ACP agent."),
     ("huggingface", "Hugging Face", "Hugging Face Inference Providers"),
     ("gemini", "Google AI Studio", "Google AI Studio (Native Gemini API)"),
     ("vertex", "Google Vertex AI", "Google Vertex AI (Gemini via GCP; OAuth2 service account or ADC, GCP billing/quotas)"),
@@ -359,7 +360,7 @@ try:
     from providers import list_providers as _list_providers_for_canonical
     for _pp in _list_providers_for_canonical():
         if _pp.name in _canonical_slugs or _pp.auth_type in {
-            "oauth_device_code", "oauth_external", "external_process", "aws_sdk", "copilot", "vertex",
+            "oauth_device_code", "oauth_external", "aws_sdk", "copilot", "vertex",
         }:
             continue
         _label = _pp.display_name or _pp.name
