@@ -109,6 +109,29 @@ def _copilot_acp_status() -> Dict[str, Any]:
     }
 
 
+def _devin_cli_status() -> Dict[str, Any]:
+    """Devin CLI login lives in credentials.toml; never spawn `devin acp`."""
+    try:
+        from hermes_cli.auth import get_external_process_provider_status
+        status = get_external_process_provider_status("devin") or {}
+    except Exception:
+        status = {}
+    verified = bool(status.get("auth_verified"))
+    configured = bool(status.get("configured") or status.get("logged_in"))
+    if verified:
+        source_label = status.get("auth_source") or "Devin CLI credentials"
+    elif configured:
+        found = status.get("resolved_command") or status.get("command") or "devin"
+        source_label = f"Managed by the Devin CLI ({found})"
+    else:
+        source_label = "Devin CLI not found on PATH"
+    return {
+        "logged_in": verified, "source": "devin_cli", "source_label": source_label,
+        "token_preview": None, "expires_at": None, "has_refresh_token": False,
+        "configured": configured,
+    }
+
+
 def _external_process_cli_command(provider_id: str, default: str) -> str:
     """Render an external-process provider's sign-in command with the CLI actually configured
     (``HERMES_COPILOT_ACP_COMMAND`` / ``COPILOT_CLI_PATH``); others get ``default`` untouched."""
@@ -156,6 +179,8 @@ _OAUTH_PROVIDER_CATALOG: tuple[Dict[str, Any], ...] = (
     # (slash-commands only exist inside an interactive session).
     {"id": "copilot-acp", "name": "GitHub Copilot (ACP)", "flow": "external", "cli_command": "copilot login",
      "docs_url": "https://docs.github.com/en/copilot", "status_fn": _copilot_acp_status},
+    {"id": "devin", "name": "Devin CLI (OAuth)", "flow": "external", "cli_command": "devin auth login",
+     "docs_url": "https://docs.devin.ai/cli", "status_fn": _devin_cli_status},
     # Anthropic / Claude entries sit at the bottom. Deliberately flow == "external": an
     # in-dashboard Connect button would let a scriptable HTTP endpoint mint Claude Pro/Max
     # subscription tokens outside Anthropic's own client, against its OAuth usage policies.
