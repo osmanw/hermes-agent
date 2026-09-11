@@ -266,6 +266,13 @@ _IDENTICAL_CALL_NOTICE = (
     "proceed with what you have.]"
 )
 
+_NONCONSECUTIVE_CALL_NOTICE = (
+    "[hermes note: this is the {ordinal} call to {tool_name} this turn with "
+    "identical arguments returning the same result (not consecutive — other calls ran "
+    "in between). Do not repeat it — change arguments, use a different tool, or "
+    "proceed with what you have.]"
+)
+
 # tool -> (LoopCapConfig field, controller counter attribute, decision code)
 _LOOP_CAPS: dict[str, tuple[str, str, str]] = {
     "web_search": ("max_web_searches", "_turn_web_search_count", "loop_web_search_cap"),
@@ -298,6 +305,11 @@ class ToolCallGuardrailController:
         self._identical_streak_result_hash: str = ""
         self._identical_streak_count: int = 0
         self._identical_streak_first_call_id: str = ""
+        # Non-consecutive replay tracker: (tool, args, result_hash) -> count, across the WHOLE
+        # turn regardless of intervening calls. The consecutive streak above misses replays that
+        # alternate with other calls (read A -> grep B -> read A again); this catches them.
+        # Keyed by result hash so a replay after the file changed restarts the count.
+        self._repeat_call_counts: dict[tuple[ToolCallSignature, str], int] = {}
         # tool_call_id -> spillover path, so a stub referencing a persisted-output preview can't dangle.
         self._persisted_result_paths: dict[str, str] = {}
         self._turn_web_search_count = 0
@@ -425,14 +437,28 @@ class ToolCallGuardrailController:
             self._identical_streak_first_call_id = tool_call_id or ""
         count = self._identical_streak_count
 
+        # Non-consecutive replay count: same (tool, args, identical result) anywhere earlier this
+        # turn. Catches loops that alternate a repeat with other calls, which the consecutive
+        # streak above structurally misses. Result-hash-keyed, so a re-read after the file
+        # changed restarts at 1 and is never flagged.
+        nonconsec_count = 0
+        if is_plain_str:
+            key = (signature, result_hash)
+            nonconsec_count = self._repeat_call_counts.get(key, 0) + 1
+            self._repeat_call_counts[key] = nonconsec_count
+
         notice = None
-        if not is_stall_guard_repeatable(tool_name) and count >= STALL_GUARD_IDENTICAL_CALL_THRESHOLD:
-            notice = _IDENTICAL_CALL_NOTICE.format(ordinal=_ordinal(count), tool_name=tool_name)
-            # The no-progress BLOCK in before_call only covers idempotent_tools; this streak
-            # is tool-agnostic, so with hard stops on, halt at the same threshold (a model
-            # replaying a successful `terminal` call otherwise runs to the budget).
-            if self.config.hard_stop_enabled and count >= self.config.no_progress_block_after and self._halt_decision is None:
-                self._decide("halt", "identical_call_streak_halt", tool_name, count, signature)
+        if not is_stall_guard_repeatable(tool_name):
+            if count >= STALL_GUARD_IDENTICAL_CALL_THRESHOLD:
+                notice = _IDENTICAL_CALL_NOTICE.format(ordinal=_ordinal(count), tool_name=tool_name)
+            elif nonconsec_count >= STALL_GUARD_IDENTICAL_CALL_THRESHOLD:
+                notice = _NONCONSECUTIVE_CALL_NOTICE.format(ordinal=_ordinal(nonconsec_count), tool_name=tool_name)
+            # The no-progress BLOCK in before_call only covers idempotent_tools; the identical
+            # streaks are tool-agnostic, so with hard stops on, halt at the same threshold (a
+            # model replaying a successful `terminal` call otherwise runs to the budget).
+            halt_count = max(count, nonconsec_count)
+            if self.config.hard_stop_enabled and halt_count >= self.config.no_progress_block_after and self._halt_decision is None:
+                self._decide("halt", "identical_call_streak_halt", tool_name, halt_count, signature)
 
         stub = None
         if is_plain_str and count >= 2 and not failed and len(result) >= IDENTICAL_RESULT_STUB_MIN_CHARS:

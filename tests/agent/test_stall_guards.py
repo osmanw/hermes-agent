@@ -76,10 +76,13 @@ def test_does_not_fire_when_results_differ():
 def test_streak_resets_when_a_different_call_intervenes():
     c = ToolCallGuardrailController()
     assert _observe_n(c, 2)[-1] is None
-    # Different tool breaks the consecutive streak.
+    # Different tool breaks the consecutive streak (the consecutive counter
+    # restarts), but the non-consecutive replay tracker still counts them.
     assert c.observe_call("read_file", {"path": "/a"}, "data").notice is None
-    # Two more of the original are a fresh streak of 2 — still no notice.
-    assert all(n is None for n in _observe_n(c, 2))
+    # 3rd sighting of the same call+result (non-consecutive) still notices —
+    # the OLD behaviour let it slip by resetting the streak.
+    third = c.observe_call("web_search", {"query": "x"}, "same result").notice
+    assert third is not None and "not consecutive" in third
 
 
 def test_arg_canonicalization_ignores_key_order():
