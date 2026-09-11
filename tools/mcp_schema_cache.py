@@ -67,7 +67,10 @@ def get_cached_entry(server_name: str, fingerprint: str) -> Optional[dict]:
         return None
     ttl_ms = entry.get("ttl_ms")
     written_at = entry.get("written_at")
-    expired = (isinstance(ttl_ms, (int, float)) and isinstance(written_at, (int, float))
+    # ``ttlMs: 0`` is "no caching hint" (SEP-2549), not "expires immediately". Treating it as an
+    # instant expiry made every ``lazy: true`` server a permanent cache miss, so lazy silently
+    # degraded to an eager connect on every startup (observed with context7).
+    expired = (isinstance(ttl_ms, (int, float)) and ttl_ms > 0 and isinstance(written_at, (int, float))
                and (time.time() - written_at) * 1000.0 >= float(ttl_ms))
     return None if expired else entry
 

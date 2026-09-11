@@ -18,6 +18,15 @@ def test_entry_without_ttl_never_expires():
     assert sc.get_cached_entry("srv", "fp") is not None
 
 
+def test_entry_with_zero_ttl_is_not_expired(monkeypatch):
+    # ttlMs: 0 is "no hint" (SEP-2549), not "expire at once"; context7 sends exactly this and a
+    # lazy server whose entry is always a miss degrades to an eager connect on every startup.
+    sc.write_cache_entry("srv", "fp", tools=[{"name": "t"}], ttl_ms=0)
+    real_time = time.time
+    monkeypatch.setattr(sc.time, "time", lambda: real_time() + 3600.0)
+    assert sc.get_cached_entry("srv", "fp") is not None
+
+
 def test_entry_within_ttl_served():
     sc.write_cache_entry("srv", "fp", tools=[{"name": "t"}], ttl_ms=60_000)
     entry = sc.get_cached_entry("srv", "fp")
