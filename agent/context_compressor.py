@@ -1882,6 +1882,8 @@ class ContextCompressor(SummaryDispatchMixin, MicroCompactionMixin, ContextEngin
         self._prellm_skip_count = 0
         # Only a healthy completed summary resets this; ordinary fitting responses do not.
         self._fallback_compression_streak = 0
+        # One-shot guard for the same-route retry after a spurious length-stop (_on_summary_failure).
+        self._summary_truncation_retried = False
         # Armed at a completed boundary; consumed by the next real prompt count in update_from_response().
         self._verify_compaction_cleared_threshold = False
         # Lets the boundary wrapper tell a completed rewrite from a no-op without inferring from length.
@@ -3342,6 +3344,7 @@ Summary generation was unavailable, so this is a best-effort deterministic fallb
             self._previous_summary = summary
             self._clear_compression_failure_cooldown()
             self._summary_model_fallen_back = False
+            self._summary_truncation_retried = False
             self._last_summary_error = None
             for flag, _class, _msg in _TERMINAL_SUMMARY_FAILURES:
                 setattr(self, flag, False)
@@ -3521,6 +3524,25 @@ Write only the summary body. Do not include any preamble or prefix."""
             self._fallback_to_main_for_compression(e, kind.fallback_reason())
             # Retry immediately on the main model.
             return self._generate_summary(turns_to_summarize, focus_topic=focus_topic, memory_context=memory_context)
+
+        # No DISTINCT summary_model to fall back to (the common case: the compression model is
+        # resolved inside call_llm from auxiliary.compression.*, so self.summary_model is ""), yet a
+        # length-stop is frequently a spurious early cut by the aux endpoint rather than a real
+        # output-budget limit — the identical payload summarizes cleanly on retry. Without this
+        # branch the fallback above is unreachable for those routes and ONE bad response aborts the
+        # whole compaction, leaving the session stuck over its threshold with no way to shrink.
+        # Retry the same route once; a second failure falls through to the abort path below, which
+        # still preserves every message.
+        if kind.truncated and not getattr(self, "_summary_truncation_retried", False):
+            self._summary_truncation_retried = True
+            logger.warning(
+                "Context compression summary was truncated (%s); retrying the summary call once "
+                "before aborting.", _TRUNCATED_SUMMARY_MARKER,
+            )
+            return self._generate_summary(
+                turns_to_summarize, focus_topic=focus_topic, memory_context=memory_context,
+                bypass_cooldown=True,
+            )
 
         # Transient errors: short cooldown for JSON-decode/streaming-closed. Timeouts escalate
         # 60s→300s→900s (structural repeat offenders) and take precedence over the short rung.
