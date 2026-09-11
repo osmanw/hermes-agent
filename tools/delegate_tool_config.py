@@ -434,6 +434,31 @@ def _resolve_child_fallback_chain(parent_agent, routing_cfg: Any, pinned: bool) 
     return normalized or default
 
 
+def _provider_owns_its_transport(provider: Optional[str]) -> bool:
+    """True when ``provider`` registers a ProviderProfile that builds its own client.
+
+    External-process providers are not all ACP: a profile may override
+    ``ProviderProfile.create_client`` to return any transport (the Devin plugin returns an
+    HTTP inference client). Such a provider must keep its own name so
+    ``agent_runtime_helpers._provider_supplied_client`` can find the profile; renaming it to
+    ``copilot-acp`` sends it to the Copilot stdio shim instead. Unknown/unregistered providers
+    return False so the historical ACP behaviour is unchanged.
+    """
+    name = str(provider or "").strip()
+    if not name or name == "copilot-acp":
+        return False
+    try:
+        from providers import get_provider_profile
+        from providers.base import ProviderProfile
+        profile = get_provider_profile(name)
+    except Exception:
+        return False
+    if profile is None:
+        return False
+    # Only a profile that actually overrides create_client supplies a transport.
+    return type(profile).create_client is not ProviderProfile.create_client
+
+
 def _resolve_child_runtime(
     parent_agent, delegation_cfg: dict, parent_api_key: Any, *, model: Optional[str], override_provider: Optional[str],
     override_base_url: Optional[str], override_api_key: Optional[str], override_api_mode: Optional[str],
@@ -487,8 +512,10 @@ def _resolve_child_runtime(
     # transport that cannot run must fail the spawn loudly (#80450) — silently falling back to the default
     # transport would run the child somewhere the user explicitly routed it away from. Normally unreachable
     # via delegate_task, which pre-validates the command in _resolve_delegation_credentials.
-    if override_acp_command:
-        # Forced ACP transport requires provider copilot-acp for run_agent to init the client.
+    # Forced ACP transport requires provider copilot-acp for run_agent to init the client — unless the
+    # pinned provider brings its own (see _provider_owns_its_transport): renaming that one would send
+    # it to the Copilot stdio shim and spawn `<cli> --acp --stdio` against a CLI that never had the flag.
+    if override_acp_command and not _provider_owns_its_transport(override_provider):
         effective_provider, effective_api_mode = "copilot-acp", "chat_completions"
 
     # Reasoning: delegation.reasoning_effort > parent. Keep the raw value — a
